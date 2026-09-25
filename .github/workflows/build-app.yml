@@ -2,10 +2,16 @@ name: Build desktop app
 
 # Builds "Site Collector" for macOS (Apple Silicon + Intel) and Windows.
 # - Every push to main that touches the app: downloadable build artifacts on the run page.
-# - Pushing a tag like v1.0.0: also publishes a GitHub Release with the downloads attached.
+# - Publishing a release: Actions → Build desktop app → Run workflow, and type a version such as
+#   v1.1.0 (or push a tag like v1.1.0). The downloads are attached to a GitHub Release.
 # Content-only commits (sites/, report.csv) don't trigger a build.
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Publish a release with this version, e.g. v1.1.0 (leave empty to just build)"
+        required: false
+        default: ""
   push:
     branches: [main]
     tags: ["v*"]
@@ -80,7 +86,7 @@ jobs:
           retention-days: 30
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -91,5 +97,20 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Site Collector ${{ inputs.version || github.ref_name }}
           files: "*.zip"
           generate_release_notes: true
+          body: |
+            ## Download
+            - **Mac with Apple Silicon (M1–M4):** `Site-Collector-mac-apple-silicon.zip`
+            - **Older Intel Mac:** `Site-Collector-mac-intel.zip`
+            - **Windows:** `Site-Collector-windows.zip`
+
+            ## Install on a Mac
+            1. Unzip, then drag **Site Collector** into **Applications**.
+            2. The first time, macOS blocks it because it isn't signed by an Apple developer. Try to open it once, then go to **System Settings → Privacy & Security → Open Anyway**.
+               If macOS says the app *is damaged*, run this once in Terminal: `xattr -cr "/Applications/Site Collector.app"`
+
+            See the README for how to use it.
