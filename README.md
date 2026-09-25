@@ -1,14 +1,86 @@
-# Site collection
+# Site Collector
 
-This repo captures the current content and images of the customer's one-page WordPress/Elementor
-sites. The collected content will later be mapped to a shared section model. This stage only
-collects: it doesn't redesign anything or make any changes in WordPress.
+Site Collector captures the current content and images of one-page WordPress/Elementor sites, so
+they can be rebuilt later. For every website it saves the raw HTML, the Elementor CSS, every image
+and a `manifest.json` describing the page's sections, menu, forms and images. It also writes a
+`report.csv` covering the whole job.
 
-> **This repo holds client content and must be private.** Check that it's private on GitHub
-> (Settings → General → Danger Zone → Change visibility) before committing anything under `sites/`.
-> No credentials are needed or stored anywhere. Only the public sites are collected.
+It comes as a **desktop app** (macOS and Windows) and as a **command-line script** (`collect.py`).
+Both run the same collector and produce the same output.
 
-## Setup (macOS)
+> **Client content must stay private.** Keep job folders out of public repos. If you commit a job
+> to GitHub, make sure that repo is private. No credentials are needed or stored: only the public
+> websites are collected.
+
+## Desktop app
+
+### Download
+
+The app is built automatically by GitHub Actions (see [`build-app.yml`](.github/workflows/build-app.yml)).
+
+- **Releases:** on the repo's **Releases** page, download the zip for your computer:
+  - `Site-Collector-mac-apple-silicon.zip` for M1/M2/M3/M4 Macs
+  - `Site-Collector-mac-intel.zip` for older Intel Macs
+  - `Site-Collector-windows.zip`
+- **Latest build:** the **Actions** tab → *Build desktop app* → the latest run → **Artifacts**.
+
+A new release is published whenever a version tag (e.g. `v1.1.0`) is pushed.
+
+### Install on a Mac
+
+1. Unzip the file and drag **Site Collector** into **Applications**.
+2. The app isn't signed with an Apple Developer certificate, so macOS blocks it the first time you
+   open it:
+   - Open it once and dismiss the warning. Then go to **System Settings → Privacy & Security**,
+     scroll down and click **Open Anyway**.
+   - If macOS instead says the app *"is damaged and can't be opened"*, run this once in Terminal:
+     ```bash
+     xattr -cr "/Applications/Site Collector.app"
+     ```
+3. From then on, open it like any other app.
+
+On Windows, unzip the folder anywhere and run `Site Collector.exe`. If SmartScreen appears, click
+**More info → Run anyway**.
+
+### Using it
+
+1. **Job folder → Choose…** Pick or create a folder for this job, e.g.
+   `Documents/Site Collections/Acme`. Everything for the job is saved there: `sites.txt`, `sites/`,
+   `report.csv` and `collect.log`. The app remembers the last folder you used.
+2. **Websites:** paste the domains, one per line, or use **Import list…** to load a `.txt` or
+   `.csv` file.
+3. **Test run:** keep *Test run — only the first 3 sites* ticked for the first go, press **Start**,
+   and check the results. Then untick it and press **Start** again to collect the rest. Sites that
+   have already been collected are skipped.
+4. **Results:** the table fills in as each site finishes. Green is OK, orange means the page is in
+   a special state (maintenance, password, redirect), and red means the page couldn't be fetched.
+   - Select one or more rows to **Open folder**, **View saved page** or **Open live site**.
+   - **Collect again** re-collects the selected sites.
+   - **Render in Chrome** re-collects them through a real browser. Use it for sites whose content
+     looks incomplete; the app will suggest which ones.
+   - Right-clicking a row gives the same options.
+5. **Stop** finishes the current site and then stops. Press **Start** later to carry on where it
+   left off.
+
+**Options:**
+- *Retry sites that had problems* only re-collects the sites whose last status wasn't OK.
+- *Re-collect every site* starts over.
+
+**Render in Chrome** uses the Google Chrome (or Microsoft Edge) already installed on the computer.
+
+### Building the app yourself
+
+A Mac app has to be built on a Mac (Windows on Windows):
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-render.txt pyinstaller pillow
+python packaging/build.py          # -> dist/Site Collector.app
+```
+
+## Command line (advanced)
+
+### Setup (macOS)
 
 ```bash
 cd LocalScraper
@@ -21,9 +93,11 @@ pip install -r requirements-render.txt
 python -m playwright install chromium
 ```
 
-Run `source .venv/bin/activate` in each new terminal before using the script.
+Run `source .venv/bin/activate` in each new terminal before using the script. You can also run the
+desktop app from source with `python app.py`. It needs a Python that includes Tk: the python.org
+installer does, and Homebrew needs `brew install python-tk`.
 
-## Usage
+### Usage
 
 Put the domains in `sites.txt`, one per line. The script ignores blank lines and lines that start
 with `#`.
@@ -34,7 +108,7 @@ python collect.py                                 # every site not collected yet
 python collect.py --only example.com              # one site (repeat --only for more)
 python collect.py --only example.com --force      # re-collect a site that's already collected
 python collect.py --retry-failed                  # re-collect sites whose last status wasn't "ok"
-python collect.py --only example.com --render     # add rendered.html (headless Chromium)
+python collect.py --only example.com --render     # add rendered.html (headless browser)
 python collect.py --report-only                   # rebuild report.csv without fetching anything
 ```
 
@@ -44,8 +118,9 @@ python collect.py --report-only                   # rebuild report.csv without f
 | `--limit N` | Only process the first N domains in `sites.txt`. |
 | `--force` | Re-collect sites that already have a `manifest.json`. Without it they're skipped. |
 | `--retry-failed` | Re-collect only the sites whose last status wasn't `ok`. |
-| `--render` | Also load the page in headless Chromium, scroll to the bottom and save `rendered.html`. Re-collects the selected sites. Use it with `--only` for sites where `index.html` is clearly missing content. |
+| `--render` | Also load the page in a headless browser, scroll to the bottom and save `rendered.html`. Re-collects the selected sites. Use it with `--only` for sites where `index.html` is clearly missing content. |
 | `--report-only` | Rebuild `report.csv` from the existing manifests. |
+| `--sites` / `--out` / `--report` | Input list, output folder and report path (default: next to the script). |
 | `--workers N` | Number of parallel image downloads per site (default 4). |
 | `--min-delay` / `--max-delay` | Pause between sites in seconds (default 1–2). |
 | `-v` | Show debug output. The full log always goes to `collect.log`. |
@@ -134,10 +209,11 @@ The manifest follows the project brief, with a few extra fields that will help t
 
 ## Acceptance checks
 
-1. **Try 3 sites first:** `python collect.py --limit 3`, then look at `report.csv` and
-   `sites/*/manifest.json`.
-2. **Text is all there:** open a few random `index.html` files in a browser. Styling may look
-   broken offline, which is fine. The text should all be there.
+1. **Try 3 sites first:** use the app's test run, or `python collect.py --limit 3`. Then look at
+   `report.csv` and `sites/*/manifest.json`.
+2. **Text is all there:** open a few random `index.html` files in a browser. In the app, select
+   a row and click **View saved page**. Styling may look broken offline, which is fine. The text
+   should all be there.
    ```bash
    ls sites | sort -R | head -3 | while read d; do open "sites/$d/index.html"; done
    ```
@@ -164,6 +240,10 @@ content commit.
 pip install -r requirements-render.txt   # the render test is skipped if Playwright isn't installed
 python -m unittest discover -s tests -v
 ```
+
+GitHub Actions runs the tests before every app build. Each build also runs the packaged app's
+self-test (`--self-test --require-browser`), which checks that it can launch a browser and render
+a page.
 
 The tests serve a realistic mock Elementor site locally, plus maintenance, password-protected,
 redirecting, JavaScript-rendered and unresolvable sites. They then check the manifest, the image

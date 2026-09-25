@@ -1,0 +1,95 @@
+name: Build desktop app
+
+# Builds "Site Collector" for macOS (Apple Silicon + Intel) and Windows.
+# - Every push to main that touches the app: downloadable build artifacts on the run page.
+# - Pushing a tag like v1.0.0: also publishes a GitHub Release with the downloads attached.
+# Content-only commits (sites/, report.csv) don't trigger a build.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - app.py
+      - collect.py
+      - requirements*.txt
+      - packaging/**
+      - tests/**
+      - .github/workflows/build-app.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -r requirements-render.txt
+          python -m playwright install --with-deps chromium
+      - name: Tests
+        run: python -m unittest discover -s tests -v
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            artifact: Site-Collector-mac-apple-silicon
+          - os: macos-15-intel
+            artifact: Site-Collector-mac-intel
+          - os: windows-latest
+            artifact: Site-Collector-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -r requirements-render.txt pyinstaller pillow
+      - name: Build
+        run: python packaging/build.py
+
+      - name: Self-test and package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          "dist/Site Collector.app/Contents/MacOS/Site Collector" --self-test selftest.txt --require-browser || { cat selftest.txt; exit 1; }
+          cat selftest.txt
+          ditto -c -k --sequesterRsrc --keepParent "dist/Site Collector.app" "${{ matrix.artifact }}.zip"
+      - name: Self-test and package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\Site Collector\Site Collector.exe" -ArgumentList "--self-test","selftest.txt","--require-browser" -Wait -PassThru
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+          Compress-Archive -Path "dist\Site Collector" -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: "*.zip"
+          generate_release_notes: true

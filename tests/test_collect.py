@@ -213,7 +213,7 @@ class CollectTests(unittest.TestCase):
             ("Home", "home"), ("About", "about"), ("Services", "services"),
             ("Contact", "contact"), ("Reviews", "reviews"),
         ])
-        self.assertIn("nav_target_missing: #reviews has no matching element", self.m["warnings"])
+        self.assertIn("nav_target_missing: menu link #reviews has no matching section on the page", self.m["warnings"])
 
     # ---- sections
 

@@ -961,13 +961,27 @@ RENDER_BG_JS = """
 """
 
 
+def launch_browser(p):
+    """Playwright's own Chromium if installed, otherwise the user's Google Chrome or Edge."""
+    errors = []
+    for kwargs in ({}, {"channel": "chrome"}, {"channel": "msedge"}):
+        try:
+            return p.chromium.launch(headless=True, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - try the next browser
+            errors.append(str(exc).splitlines()[0][:120])
+    raise RuntimeError(
+        "no browser available for rendering — install Google Chrome "
+        "(or run: python -m playwright install chromium). Details: " + " / ".join(errors)
+    )
+
+
 def render_page(url: str) -> dict:
     """Load url in headless Chromium, scroll to the bottom, return DOM + observed images."""
     from playwright.sync_api import sync_playwright  # optional dependency
 
     network: list[str] = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = launch_browser(p)
         try:
             context = browser.new_context(user_agent=USER_AGENT, viewport={"width": 1440, "height": 900})
             page = context.new_page()
@@ -1094,7 +1108,7 @@ def collect_site(domain: str, work: Path, session: requests.Session, args) -> tu
     rendered = None
     if args.render:
         try:
-            log.info("  rendering with headless Chromium...")
+            log.info("  rendering in a headless browser...")
             rendered = render_page(final_url)
             (work / "rendered.html").write_text(rendered["html"], encoding="utf-8")
         except ImportError:
@@ -1138,7 +1152,7 @@ def collect_site(domain: str, work: Path, session: requests.Session, args) -> tu
 
     for target in sorted(nav_targets):
         if not parse_soup.find(id=target) and not parse_soup.find("a", attrs={"name": target}):
-            warnings.append(f"nav_target_missing: #{target} has no matching element")
+            warnings.append(f"nav_target_missing: menu link #{target} has no matching section on the page")
 
     manifest["forms"] = extract_forms(parse_soup, section_of)
 
@@ -1273,9 +1287,10 @@ def load_manifest(out_root: Path, domain: str) -> dict | None:
         return None
 
 
-def write_report(out_root: Path, domains: list[str], report_path: Path) -> list[dict]:
+def build_report_rows(out_root: Path, domains: list[str], include_extras: bool = True) -> list[dict]:
+    """One row per domain (plus any other collected sites found in out_root)."""
     names = list(domains)
-    if out_root.exists():
+    if include_extras and out_root.exists():
         for mpath in sorted(out_root.glob("*/manifest.json")):
             try:
                 extra = json.loads(mpath.read_text(encoding="utf-8")).get("domain")
@@ -1301,11 +1316,104 @@ def write_report(out_root: Path, domains: list[str], report_path: Path) -> list[
             "forms": stats.get("forms", 0),
             "warnings": " | ".join(m.get("warnings", [])),
         })
+    return rows
+
+
+def write_report(out_root: Path, domains: list[str], report_path: Path) -> list[dict]:
+    rows = build_report_rows(out_root, domains)
     with open(report_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=REPORT_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
     return rows
+
+
+@dataclass
+class Options:
+    """Run settings shared by the command line and the desktop app."""
+    force: bool = False
+    retry_failed: bool = False
+    render: bool = False
+    workers: int = 4
+    min_delay: float = 1.0
+    max_delay: float = 2.0
+    scheme: str = "https"
+
+
+@dataclass
+class RunSummary:
+    collected: int = 0
+    skipped: int = 0
+    stopped: bool = False
+    rows: list[dict] = field(default_factory=list)
+
+
+def run_collection(selected: list[str], all_domains: list[str], out_root: Path, report_path: Path,
+                   opts: Options, *, on_start=None, on_done=None, stop=None) -> RunSummary:
+    """Collect the selected domains, then rewrite the report for all_domains.
+
+    on_start(index, total, domain) is called before a site is fetched, and
+    on_done(index, total, domain, manifest, skipped) after it. Setting the
+    threading.Event `stop` ends the run after the current site.
+    """
+    out_root.mkdir(parents=True, exist_ok=True)
+    summary = RunSummary()
+    session = make_session(opts.workers)
+    total = len(selected)
+    try:
+        for index, domain in enumerate(selected, 1):
+            if stop is not None and stop.is_set():
+                summary.stopped = True
+                break
+            existing = load_manifest(out_root, domain)
+            redo = opts.force or opts.render or (opts.retry_failed and existing and existing.get("status") != "ok")
+            if existing and not redo:
+                summary.skipped += 1
+                log.info("[%d/%d] %s — already collected (%s), skipping", index, total, domain, existing.get("status"))
+                if on_done:
+                    on_done(index, total, domain, existing, True)
+                continue
+            if summary.collected:
+                delay = random.uniform(opts.min_delay, opts.max_delay)
+                if stop is not None:
+                    if stop.wait(delay):
+                        summary.stopped = True
+                        break
+                else:
+                    time.sleep(delay)
+            if on_start:
+                on_start(index, total, domain)
+            log.info("[%d/%d] %s", index, total, domain)
+            m = run_site(domain, out_root, session, opts)
+            s = m["stats"]
+            log.info("  -> %s | %d sections | images %d/%d downloaded | %d forms%s",
+                     m["status"], s["sections"], s["images_downloaded"], s["images_found"], s["forms"],
+                     f" | {len(m['warnings'])} warnings" if m["warnings"] else "")
+            summary.collected += 1
+            if on_done:
+                on_done(index, total, domain, m, False)
+    except KeyboardInterrupt:
+        summary.stopped = True
+    finally:
+        session.close()
+    if summary.stopped:
+        log.warning("Stopped — the report covers what has been collected so far.")
+    log.info("\nCollected %d site(s), skipped %d already-collected site(s).", summary.collected, summary.skipped)
+    summary.rows = write_report(out_root, all_domains, report_path)
+    return summary
+
+
+def log_report_summary(rows: list[dict], render_hint: str) -> None:
+    problems = [r for r in rows if r["status"] != "ok"]
+    log.info("Report: %d site(s), %d ok, %d need attention.", len(rows), len(rows) - len(problems), len(problems))
+    if problems:
+        log.info("\nSites that are not 'ok':")
+        for r in problems:
+            first = r["warnings"].split(" | ")[0] if r["warnings"] else ""
+            log.info("  %-35s %-20s %s", r["domain"], r["status"], first[:100])
+    low = [r["domain"] for r in rows if "low_content" in (r["warnings"] or "")]
+    if low:
+        log.info("\nPossibly missing content — %s", render_hint.format(domains=" ".join(low), only=" ".join(f"--only {d}" for d in low)))
 
 
 def parse_args(argv=None):
@@ -1328,27 +1436,30 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def setup_logging(verbose: bool) -> None:
+def setup_logging(log_path: Path | None, verbose: bool = False, console: bool = True) -> None:
     log.setLevel(logging.DEBUG)
-    log.handlers.clear()
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.DEBUG if verbose else logging.INFO)
-    console.setFormatter(logging.Formatter("%(message)s"))
-    logfile = logging.FileHandler(ROOT / "collect.log", encoding="utf-8")
-    logfile.setLevel(logging.DEBUG)
-    logfile.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    log.addHandler(console)
-    log.addHandler(logfile)
+    for handler in list(log.handlers):
+        log.removeHandler(handler)
+        handler.close()
+    if console:
+        stream = logging.StreamHandler(sys.stdout)
+        stream.setLevel(logging.DEBUG if verbose else logging.INFO)
+        stream.setFormatter(logging.Formatter("%(message)s"))
+        log.addHandler(stream)
+    if log_path is not None:
+        logfile = logging.FileHandler(log_path, encoding="utf-8")
+        logfile.setLevel(logging.DEBUG)
+        logfile.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        log.addHandler(logfile)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    setup_logging(args.verbose)
+    setup_logging(args.report.resolve().parent / "collect.log", args.verbose)
     if not args.sites.exists():
         log.error("Input file %s not found", args.sites)
         return 2
     domains = read_sites(args.sites)
-    args.out.mkdir(parents=True, exist_ok=True)
 
     if args.only:
         selected = unique(normalize_domain(d) for d in args.only)
@@ -1358,42 +1469,14 @@ def main(argv=None) -> int:
     else:
         selected = domains[: args.limit] if args.limit else domains
 
-    if not args.report_only:
-        session = make_session(args.workers)
-        collected, skipped = 0, 0
-        try:
-            for index, domain in enumerate(selected, 1):
-                existing = load_manifest(args.out, domain)
-                redo = args.force or args.render or (args.retry_failed and existing and existing.get("status") != "ok")
-                if existing and not redo:
-                    skipped += 1
-                    log.info("[%d/%d] %s — already collected (%s), skipping; use --force to redo",
-                             index, len(selected), domain, existing.get("status"))
-                    continue
-                if collected:
-                    time.sleep(random.uniform(args.min_delay, args.max_delay))
-                log.info("[%d/%d] %s", index, len(selected), domain)
-                m = run_site(domain, args.out, session, args)
-                s = m["stats"]
-                log.info("  -> %s | %d sections | images %d/%d downloaded | %d forms%s",
-                         m["status"], s["sections"], s["images_downloaded"], s["images_found"], s["forms"],
-                         f" | {len(m['warnings'])} warnings" if m["warnings"] else "")
-                collected += 1
-        except KeyboardInterrupt:
-            log.warning("Interrupted — writing report for what has been collected so far.")
-        log.info("\nCollected %d site(s), skipped %d already-collected site(s).", collected, skipped)
-
-    rows = write_report(args.out, domains, args.report)
-    problems = [r for r in rows if r["status"] != "ok"]
-    log.info("report.csv: %d site(s), %d ok, %d need attention.", len(rows), len(rows) - len(problems), len(problems))
-    if problems:
-        log.info("\nSites that are not 'ok':")
-        for r in problems:
-            first = r["warnings"].split(" | ")[0] if r["warnings"] else ""
-            log.info("  %-35s %-20s %s", r["domain"], r["status"], first[:100])
-    low = [r["domain"] for r in rows if "low_content" in (r["warnings"] or "")]
-    if low:
-        log.info("\nPossibly missing content — try: python collect.py --render " + " ".join(f"--only {d}" for d in low))
+    if args.report_only:
+        args.out.mkdir(parents=True, exist_ok=True)
+        rows = write_report(args.out, domains, args.report)
+    else:
+        opts = Options(force=args.force, retry_failed=args.retry_failed, render=args.render, workers=args.workers,
+                       min_delay=args.min_delay, max_delay=args.max_delay, scheme=args.scheme)
+        rows = run_collection(selected, domains, args.out, args.report, opts).rows
+    log_report_summary(rows, "try: python collect.py --render {only}")
     return 0
 
 
