@@ -24,7 +24,8 @@ The app is built automatically by GitHub Actions (see [`build-app.yml`](.github/
   - `Site-Collector-windows.zip`
 - **Latest build:** the **Actions** tab → *Build desktop app* → the latest run → **Artifacts**.
 
-A new release is published whenever a version tag (e.g. `v1.1.0`) is pushed.
+A new release is published whenever a version tag (e.g. `v1.1.0`) is pushed. To build on demand,
+go to **Actions → Build desktop app → Run workflow**.
 
 ### Install on a Mac
 
