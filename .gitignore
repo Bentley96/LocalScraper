@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+collect.log
+sites/.*.tmp/
+.DS_Store

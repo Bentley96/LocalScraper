@@ -1,0 +1,4 @@
+.elementor-10 .elementor-element.elementor-element-svc1234:not(.elementor-motion-effects-element-type-background), .elementor-10 .elementor-element.elementor-element-svc1234 > .elementor-motion-effects-container > .elementor-motion-effects-layer{background-image:url("../../2024/01/services-bg.jpg");background-size:cover;}
+/* a comment with url(/wp-content/uploads/2024/01/commented-out.jpg) */
+@media(max-width:767px){.elementor-10 .elementor-element.elementor-element-svc1234{background-image:url({{ORIGIN}}/wp-content/uploads/2024/01/services-bg-mobile.jpg);}}
+@font-face{font-family:"Custom";src:url("../../fonts/custom.woff2") format("woff2");}

@@ -1,0 +1,4 @@
+# Only needed for the optional --render fallback (headless Chromium).
+# After installing, run once:  python -m playwright install chromium
+-r requirements.txt
+playwright>=1.45
