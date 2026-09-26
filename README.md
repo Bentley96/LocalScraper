@@ -12,6 +12,25 @@ Both run the same collector and produce the same output.
 > to GitHub, make sure that repo is private. No credentials are needed or stored: only the public
 > websites are collected.
 
+## Where it fits
+
+Site Collector is the first step when rebuilding a client's one-page sites on a platform that
+manages them from Git. Each client involves three repositories:
+
+| Repository | Role |
+| --- | --- |
+| **This repo** | The collection tool. It holds no client content. |
+| **One private content repo per client**, named after the client | That client's Site Collector job folder, committed as it is: `<job folder>/sites/<domain>/`, `sites.txt`, `report.csv`. |
+| **The private platform repo** | Records which content repo each client's sites come from, and builds each site's content from its snapshot. Its own guide covers the rest of the workflow. |
+
+So for a new client: collect its sites into a job folder named after the client, then commit
+that folder to a new **private** repo for the client. Never commit a job folder to this repo.
+
+The snapshots copy the old sites exactly, mistakes included. Before building new sites from
+them, look through the collected `images/` for photos of signboards, vans or banners that show
+phone numbers or town names (they are often out of date or for another area), and compare phone
+numbers across sites of the same area.
+
 ## Desktop app
 
 ### Download
@@ -226,7 +245,7 @@ The manifest follows the project brief, with a few extra fields that will help t
    ```
 4. **Every domain is reported:** `report.csv` has one row for every domain in `sites.txt`, and the
    run ends by listing the rows that aren't `ok`.
-5. **Commit and push to the private repo.**
+5. **Commit and push to the client's private content repo** (see *Where it fits*).
 
 ## Repo size
 
