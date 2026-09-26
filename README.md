@@ -26,6 +26,11 @@ manages them from Git. Each client involves three repositories:
 So for a new client: collect its sites into a job folder named after the client, then commit
 that folder to a new **private** repo for the client. Never commit a job folder to this repo.
 
+The snapshots copy the old sites exactly, mistakes included. Before building new sites from
+them, look through the collected `images/` for photos of signboards, vans or banners that show
+phone numbers or town names (they are often out of date or for another area), and compare phone
+numbers across sites of the same area.
+
 ## Desktop app
 
 ### Download
